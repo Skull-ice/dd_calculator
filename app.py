@@ -47,20 +47,46 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 """
 components.html(gtm_body, height=0)
 
-# Connexion à SQLite
+# Connexion à SQLite avec migration
 @st.cache_resource
 def init_db():
     conn = sqlite3.connect('historique.db')
     c = conn.cursor()
-    # Créer la table si elle n'existe pas, avec le nouveau champ modele_vehicule
+    
+    # Créer une table temporaire avec le nouveau schéma
+    c.execute('''CREATE TABLE IF NOT EXISTS historique_temp
+                 (date TEXT, demandeur TEXT, modele_vehicule TEXT, source TEXT, 
+                  montant_argus FLOAT, fret FLOAT, taux_cumule FLOAT, abattement TEXT, 
+                  valeur_base FLOAT, dd FLOAT, taxes FLOAT, total FLOAT)''')
+    
+    # Vérifier si l'ancienne table existe
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historique'")
+    if c.fetchone():
+        # Copier les données de l'ancienne table vers la nouvelle
+        c.execute('''INSERT INTO historique_temp (date, demandeur, source, montant_argus, 
+                     fret, taux_cumule, abattement, dd, total)
+                     SELECT date, demandeur, source, montant_argus, fret, taux_cumule, 
+                            abattement, dd, total FROM historique''')
+        # Ajouter valeur_base et taxes pour les anciens enregistrements (calcul rétroactif)
+        c.execute("SELECT * FROM historique")
+        for row in c.fetchall():
+            date, demandeur, source, montant_argus, fret, taux_cumule, abattement, dd, total = row
+            valeur_base = (montant_argus * 655.96) + fret
+            taxes = 100250 if abattement == "Oui" else 63610
+            c.execute('''UPDATE historique_temp 
+                         SET valeur_base = ?, taxes = ? 
+                         WHERE date = ? AND demandeur = ? AND source = ?''',
+                      (valeur_base, taxes, date, demandeur, source))
+        
+        # Supprimer l'ancienne table et renommer la nouvelle
+        c.execute("DROP TABLE historique")
+        c.execute("ALTER TABLE historique_temp RENAME TO historique")
+    
+    # Créer la table finale si elle n'existe pas
     c.execute('''CREATE TABLE IF NOT EXISTS historique
-                 (date TEXT, demandeur TEXT, modele_vehicule TEXT, source TEXT, montant_argus FLOAT, fret FLOAT, taux_cumule FLOAT, abattement TEXT, dd FLOAT, total FLOAT)''')
-    # Ajouter la colonne modele_vehicule si elle n'existe pas (pour DB existantes)
-    try:
-        c.execute("ALTER TABLE historique ADD COLUMN modele_vehicule TEXT")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # Colonne existe déjà
+                 (date TEXT, demandeur TEXT, modele_vehicule TEXT, source TEXT, 
+                  montant_argus FLOAT, fret FLOAT, taux_cumule FLOAT, abattement TEXT, 
+                  valeur_base FLOAT, dd FLOAT, taxes FLOAT, total FLOAT)''')
     conn.commit()
     return conn, c
 
@@ -106,14 +132,13 @@ st.subheader("Entrer les données")
 col1, col2 = st.columns(2)
 
 with col1:
-    # Montant Argus peut être écrasé manuellement si pas calculé auto
     montant_argus = st.number_input("Montant Argus (en devise d'origine, ex. EUR)", min_value=0.0, value=montant_argus, step=0.01)
     fret = st.number_input("Fret (en XOF)", min_value=0.0, value=0.0, step=100.0)
     taux_cumule_percent = st.number_input("Taux cumulé (%)", min_value=0.0, value=0.0, step=0.01)
 
 with col2:
     demandeur = st.text_input("Demandeur", "")
-    modele_vehicule = st.text_input("Modèle du Véhicule", "")  # Nouveau champ avant source
+    modele_vehicule = st.text_input("Modèle du Véhicule", "")  # Avant source
     source = st.text_input("Source", "")
     abattement_option = st.selectbox("Abattement", ["Avec abattement", "Sans abattement"])
 
@@ -147,10 +172,11 @@ if st.button("Calculer"):
         st.write(f"**Taxes** : {taxes:,.2f} XOF")
         st.write(f"**Total** : {total:,.2f} XOF")
 
-        # Ajout à l'historique (GMT+1, avec modele_vehicule)
+        # Ajout à l'historique (GMT+1, avec modele_vehicule, valeur_base, taxes)
         current_date = get_gmt1_timestamp()
-        c.execute("INSERT INTO historique VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                  (current_date, demandeur, modele_vehicule, source, montant_argus, fret, taux_cumule_percent, abattement_str, dd, total))
+        c.execute("INSERT INTO historique VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  (current_date, demandeur, modele_vehicule, source, montant_argus, fret, 
+                   taux_cumule_percent, abattement_str, valeur_base, dd, taxes, total))
         conn.commit()
 
 # Historique dans sidebar
@@ -171,6 +197,16 @@ if not df.empty:
     st.sidebar.markdown(f'<div class="{font_class}">', unsafe_allow_html=True)
     st.sidebar.dataframe(df, use_container_width=True)
     st.sidebar.markdown('</div>', unsafe_allow_html=True)
+
+# Bouton reset DB (décommenter si besoin pour recréer la table)
+# if st.sidebar.button("Reset Historique (Supprime tout)"):
+#     c.execute("DROP TABLE IF EXISTS historique")
+#     c.execute('''CREATE TABLE historique
+#                  (date TEXT, demandeur TEXT, modele_vehicule TEXT, source TEXT, 
+#                   montant_argus FLOAT, fret FLOAT, taux_cumule FLOAT, abattement TEXT, 
+#                   valeur_base FLOAT, dd FLOAT, taxes FLOAT, total FLOAT)''')
+#     conn.commit()
+#     st.sidebar.success("Historique réinitialisé.")
 
 # Fermer connexion
 conn.close()
