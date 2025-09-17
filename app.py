@@ -3,41 +3,31 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 import sqlite3
 
-# CSS pour style (caractères plus gros dans historique)
-st.markdown("""
-    <style>
-    .big-font { font-size: 18px !important; }  /* Zoom activé */
-    .normal-font { font-size: 14px !important; }  /* Font par défaut */
-    .stDataFrame {  /* Style du dataframe */
-        font-size: 14px;
-    }
-    .stDataFrame.big-font table {  /* Applique font-size au tableau */
-        font-size: 18px !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Connexion à SQLite avec migration simplifiée
+# Connexion à SQLite avec schéma simplifié et migration
 @st.cache_resource
 def init_db():
     conn = sqlite3.connect('historique.db')
     c = conn.cursor()
     
-    # Créer la table avec le schéma complet
-    c.execute('''CREATE TABLE IF NOT EXISTS historique
-                 (date TEXT, demandeur TEXT, modele_vehicule TEXT, source TEXT, 
-                  montant_argus FLOAT, fret FLOAT, taux_cumule FLOAT, abattement TEXT, 
-                  valeur_base FLOAT, dd FLOAT, taxes FLOAT, total FLOAT)''')
+    # Schéma cible
+    expected_columns = ['date', 'modele_vehicule', 'source', 'demandeur', 'total']
     
-    # Vérifier si la table a les bonnes colonnes
-    c.execute("PRAGMA table_info(historique)")
-    columns = [info[1] for info in c.fetchall()]
-    expected_columns = ['date', 'demandeur', 'modele_vehicule', 'source', 'montant_argus', 
-                        'fret', 'taux_cumule', 'abattement', 'valeur_base', 'dd', 'taxes', 'total']
-    
-    # Si les colonnes ne correspondent pas, avertir et suggérer reset
-    if set(columns) != set(expected_columns):
-        st.sidebar.warning("La base de données est incompatible. Utilisez 'Reset Historique' pour recréer la table (supprime les anciens logs).")
+    # Vérifier si la table existe
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historique'")
+    if c.fetchone():
+        # Vérifier les colonnes actuelles
+        c.execute("PRAGMA table_info(historique)")
+        current_columns = [info[1] for info in c.fetchall()]
+        
+        # Si schéma incompatible, recréer la table
+        if set(current_columns) != set(expected_columns):
+            c.execute("DROP TABLE IF EXISTS historique")
+            c.execute('''CREATE TABLE historique
+                         (date TEXT, modele_vehicule TEXT, source TEXT, demandeur TEXT, total FLOAT)''')
+    else:
+        # Créer la table si elle n'existe pas
+        c.execute('''CREATE TABLE historique
+                     (date TEXT, modele_vehicule TEXT, source TEXT, demandeur TEXT, total FLOAT)''')
     
     conn.commit()
     return conn, c
@@ -64,7 +54,7 @@ Entrez les valeurs ci-dessous et cliquez sur 'Calculer'. Le taux cumulé est en 
 """)
 
 # Calcul préliminaire du Montant Argus
-st.subheader("Calcul Préliminaire du Montant Argus (Optionnel)")
+st.subheader("Détermination du montant initial")
 col_prelim1, col_prelim2 = st.columns(2)
 with col_prelim1:
     petite_valeur = st.number_input("Petite Valeur", min_value=0.0, value=0.0, step=0.01)
@@ -107,11 +97,9 @@ if st.button("Calculer"):
         if abattement_option == "Avec abattement":
             facteur_abattement = 0.7
             taxes = 100250
-            abattement_str = "Oui"
         else:
             facteur_abattement = 1.0
             taxes = 63610
-            abattement_str = "Non"
 
         dd = valeur_base * facteur_abattement * taux_cumule
         total = dd + taxes
@@ -123,48 +111,25 @@ if st.button("Calculer"):
         st.write(f"**Taxes** : {taxes:,.2f} XOF")
         st.write(f"**Total** : {total:,.2f} XOF")
 
-        # Ajout à l'historique (GMT+1, avec modele_vehicule, valeur_base, taxes)
+        # Ajout à l'historique
         current_date = get_gmt1_timestamp()
         try:
-            c.execute("INSERT INTO historique (date, demandeur, modele_vehicule, source, montant_argus, fret, taux_cumule, abattement, valeur_base, dd, taxes, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                      (current_date, demandeur, modele_vehicule, source, montant_argus, fret, 
-                       taux_cumule_percent, abattement_str, valeur_base, dd, taxes, total))
+            c.execute("INSERT INTO historique (date, modele_vehicule, source, demandeur, total) VALUES (?, ?, ?, ?, ?)",
+                      (current_date, modele_vehicule, source, demandeur, total))
             conn.commit()
-        except sqlite3.ProgrammingError:
-            st.error("Erreur d'insertion dans l'historique. Essayez de réinitialiser la base de données via 'Reset Historique'.")
+        except sqlite3.ProgrammingError as e:
+            st.error(f"Erreur d'insertion dans l'historique : {str(e)}")
 
 # Historique dans sidebar
 st.sidebar.subheader("Historique des Calculs")
-if 'zoom' not in st.session_state:
-    st.session_state.zoom = False
-
-# Bouton zoom (version standard)
-if st.sidebar.button("Zoom Historique"):
-    st.session_state.zoom = not st.session_state.zoom
-    st.rerun()
-
-# Bouton reset DB
-if st.sidebar.button("Reset Historique (Supprime tout)"):
-    c.execute("DROP TABLE IF EXISTS historique")
-    c.execute('''CREATE TABLE historique
-                 (date TEXT, demandeur TEXT, modele_vehicule TEXT, source TEXT, 
-                  montant_argus FLOAT, fret FLOAT, taux_cumule FLOAT, abattement TEXT, 
-                  valeur_base FLOAT, dd FLOAT, taxes FLOAT, total FLOAT)''')
-    conn.commit()
-    st.sidebar.success("Historique réinitialisé.")
-
-# Afficher historique avec font-size dynamique
 try:
     df = pd.read_sql_query("SELECT * FROM historique", conn)
     if not df.empty:
-        font_class = "big-font" if st.session_state.zoom else "normal-font"
-        st.sidebar.markdown(f'<div class="{font_class}">', unsafe_allow_html=True)
         st.sidebar.dataframe(df, use_container_width=True)
-        st.sidebar.markdown('</div>', unsafe_allow_html=True)
     else:
         st.sidebar.write("Aucun calcul dans l'historique.")
-except sqlite3.ProgrammingError:
-    st.sidebar.error("Erreur de lecture de l'historique. Cliquez sur 'Reset Historique' pour recréer la table.")
+except sqlite3.ProgrammingError as e:
+    st.sidebar.error(f"Erreur de lecture de l'historique : {str(e)}")
 
 # Fermer connexion
 conn.close()
