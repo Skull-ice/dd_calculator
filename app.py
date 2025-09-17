@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 import sqlite3
-import streamlit.components.v1 as components
 
 # CSS pour style (caractères plus gros, bouton zoom)
 st.markdown("""
@@ -25,27 +24,6 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-
-# Injecter GTM (Header)
-gtm_head = """
-<!-- Google Tag Manager -->
-<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-})(window,document,'script','dataLayer','GTM-XXXXXX');</script>
-<!-- End Google Tag Manager -->
-"""
-components.html(gtm_head, height=0)
-
-# Injecter GTM (Body, noscript)
-gtm_body = """
-<!-- Google Tag Manager (noscript) -->
-<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-XXXXXX"
-height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
-<!-- End Google Tag Manager (noscript) -->
-"""
-components.html(gtm_body, height=0)
 
 # Connexion à SQLite avec migration
 @st.cache_resource
@@ -144,7 +122,6 @@ with col2:
 
 # Bouton de calcul
 if st.button("Calculer"):
-    components.html("<script>window.dataLayer.push({'event': 'calculate_click'});</script>", height=0)
     if not montant_argus or not fret or not taux_cumule_percent or not demandeur or not source:
         st.error("Veuillez remplir tous les champs obligatoires.")
     else:
@@ -186,7 +163,6 @@ if 'zoom' not in st.session_state:
 
 # Bouton zoom
 if st.sidebar.button("Zoom Historique", key="zoom_btn", help="Agrandir/réduire le texte"):
-    components.html("<script>window.dataLayer.push({'event': 'zoom_click'});</script>", height=0)
     st.session_state.zoom = not st.session_state.zoom
     st.rerun()
 
