@@ -3,19 +3,11 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 import sqlite3
 
-# CSS pour style (caractères plus gros, bouton zoom)
+# CSS pour style (caractères plus gros dans historique)
 st.markdown("""
     <style>
     .big-font { font-size: 18px !important; }  /* Zoom activé */
     .normal-font { font-size: 14px !important; }  /* Font par défaut */
-    .stButton > button.zoom-btn {  /* Bouton zoom stylé */
-        width: 180px;
-        height: 60px;
-        font-size: 22px !important;
-        background-color: #4CAF50;
-        color: white;
-        border-radius: 8px;
-    }
     .stDataFrame {  /* Style du dataframe */
         font-size: 14px;
     }
@@ -40,25 +32,32 @@ def init_db():
     # Vérifier si l'ancienne table existe
     c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historique'")
     if c.fetchone():
-        # Copier les données de l'ancienne table vers la nouvelle
-        c.execute('''INSERT INTO historique_temp (date, demandeur, source, montant_argus, 
-                     fret, taux_cumule, abattement, dd, total)
-                     SELECT date, demandeur, source, montant_argus, fret, taux_cumule, 
-                            abattement, dd, total FROM historique''')
-        # Ajouter valeur_base et taxes pour les anciens enregistrements (calcul rétroactif)
-        c.execute("SELECT * FROM historique")
-        for row in c.fetchall():
-            date, demandeur, source, montant_argus, fret, taux_cumule, abattement, dd, total = row
-            valeur_base = (montant_argus * 655.96) + fret
-            taxes = 100250 if abattement == "Oui" else 63610
-            c.execute('''UPDATE historique_temp 
-                         SET valeur_base = ?, taxes = ? 
-                         WHERE date = ? AND demandeur = ? AND source = ?''',
-                      (valeur_base, taxes, date, demandeur, source))
+        # Vérifier les colonnes de l'ancienne table
+        c.execute("PRAGMA table_info(historique)")
+        columns = [info[1] for info in c.fetchall()]
+        expected_columns = ['date', 'demandeur', 'source', 'montant_argus', 'fret', 
+                            'taux_cumule', 'abattement', 'dd', 'total']
         
-        # Supprimer l'ancienne table et renommer la nouvelle
-        c.execute("DROP TABLE historique")
-        c.execute("ALTER TABLE historique_temp RENAME TO historique")
+        # Si l'ancienne table n'a pas le nouveau schéma, migrer
+        if set(columns) != set(expected_columns + ['modele_vehicule', 'valeur_base', 'taxes']):
+            # Copier les données compatibles
+            columns_str = ", ".join(expected_columns)
+            c.execute(f'''INSERT INTO historique_temp ({columns_str})
+                         SELECT {columns_str} FROM historique''')
+            # Calcul rétroactif pour valeur_base et taxes
+            c.execute("SELECT * FROM historique")
+            for row in c.fetchall():
+                date, demandeur, source, montant_argus, fret, taux_cumule, abattement, dd, total = row
+                valeur_base = (montant_argus * 655.96) + fret
+                taxes = 100250 if abattement == "Oui" else 63610
+                c.execute('''UPDATE historique_temp 
+                             SET valeur_base = ?, taxes = ?, modele_vehicule = ?
+                             WHERE date = ? AND demandeur = ? AND source = ?''',
+                          (valeur_base, taxes, None, date, demandeur, source))
+            
+            # Supprimer l'ancienne table et renommer
+            c.execute("DROP TABLE historique")
+            c.execute("ALTER TABLE historique_temp RENAME TO historique")
     
     # Créer la table finale si elle n'existe pas
     c.execute('''CREATE TABLE IF NOT EXISTS historique
@@ -89,8 +88,8 @@ Cette application calcule les droits de douane selon la formule :
 Entrez les valeurs ci-dessous et cliquez sur 'Calculer'. Le taux cumulé est en pourcentage (ex. 57.44 pour 57.44%).
 """)
 
-# Calcul préliminaire du Montant Argus
-st.subheader("Calcul Préliminaire du Montant Argus (Optionnel)")
+# Calcul préliminaire
+st.subheader("Détermination du montant initial")
 col_prelim1, col_prelim2 = st.columns(2)
 with col_prelim1:
     petite_valeur = st.number_input("Petite Valeur", min_value=0.0, value=0.0, step=0.01)
@@ -151,7 +150,7 @@ if st.button("Calculer"):
 
         # Ajout à l'historique (GMT+1, avec modele_vehicule, valeur_base, taxes)
         current_date = get_gmt1_timestamp()
-        c.execute("INSERT INTO historique VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        c.execute("INSERT INTO historique (date, demandeur, modele_vehicule, source, montant_argus, fret, taux_cumule, abattement, valeur_base, dd, taxes, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (current_date, demandeur, modele_vehicule, source, montant_argus, fret, 
                    taux_cumule_percent, abattement_str, valeur_base, dd, taxes, total))
         conn.commit()
@@ -161,8 +160,8 @@ st.sidebar.subheader("Historique des Calculs")
 if 'zoom' not in st.session_state:
     st.session_state.zoom = False
 
-# Bouton zoom
-if st.sidebar.button("Zoom Historique", key="zoom_btn", help="Agrandir/réduire le texte"):
+# Bouton zoom (version standard)
+if st.sidebar.button("Zoom Historique"):
     st.session_state.zoom = not st.session_state.zoom
     st.rerun()
 
