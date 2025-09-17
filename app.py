@@ -3,10 +3,9 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 import sqlite3
 
-# Connexion à SQLite avec schéma simplifié et migration
-@st.cache_resource
+# Fonction pour initialiser la DB
 def init_db():
-    conn = sqlite3.connect('historique.db')
+    conn = sqlite3.connect('historique.db', check_same_thread=False)
     c = conn.cursor()
     
     # Schéma cible
@@ -30,9 +29,10 @@ def init_db():
                      (date TEXT, modele_vehicule TEXT, source TEXT, demandeur TEXT, total FLOAT)''')
     
     conn.commit()
-    return conn, c
+    conn.close()
 
-conn, c = init_db()
+# Appeler init_db au démarrage
+init_db()
 
 # Fonction pour timestamp GMT+1
 def get_gmt1_timestamp():
@@ -112,16 +112,21 @@ if st.button("Calculer"):
         st.write(f"**Total** : {total:,.2f} XOF")
 
         # Ajout à l'historique
-        current_date = get_gmt1_timestamp()
+        conn = sqlite3.connect('historique.db', check_same_thread=False)
+        c = conn.cursor()
         try:
             c.execute("INSERT INTO historique (date, modele_vehicule, source, demandeur, total) VALUES (?, ?, ?, ?, ?)",
-                      (current_date, modele_vehicule, source, demandeur, total))
+                      (get_gmt1_timestamp(), modele_vehicule, source, demandeur, total))
             conn.commit()
         except sqlite3.ProgrammingError as e:
             st.error(f"Erreur d'insertion dans l'historique : {str(e)}")
+        finally:
+            conn.close()
 
 # Historique dans sidebar
 st.sidebar.subheader("Historique des Calculs")
+conn = sqlite3.connect('historique.db', check_same_thread=False)
+c = conn.cursor()
 try:
     df = pd.read_sql_query("SELECT * FROM historique", conn)
     if not df.empty:
@@ -130,6 +135,5 @@ try:
         st.sidebar.write("Aucun calcul dans l'historique.")
 except sqlite3.ProgrammingError as e:
     st.sidebar.error(f"Erreur de lecture de l'historique : {str(e)}")
-
-# Fermer connexion
-conn.close()
+finally:
+    conn.close()
